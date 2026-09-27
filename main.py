@@ -10,6 +10,7 @@ from object_handler import *
 from weapon import *
 from sound import *
 from pathfinding import *
+from vision import bridge as camera
 
 
 class Game:
@@ -23,6 +24,7 @@ class Game:
         self.global_trigger = False
         self.global_event = pg.USEREVENT + 0
         pg.time.set_timer(self.global_event, 40)
+        camera.start()
         self.new_game()
 
     def new_game(self):
@@ -49,6 +51,7 @@ class Game:
         # self.screen.fill('black')
         self.object_renderer.draw()
         self.weapon.draw()
+        camera.draw_preview(self.screen)
         # self.map.draw()
         # self.player.draw()
 
@@ -56,11 +59,13 @@ class Game:
         self.global_trigger = False
         for event in pg.event.get():
             if event.type == pg.QUIT or (event.type == pg.KEYDOWN and event.key == pg.K_ESCAPE):
+                camera.stop()
                 pg.quit()
                 sys.exit()
+            elif event.type == pg.KEYDOWN and event.key == pg.K_c:
+                camera.recalibrate()
             elif event.type == self.global_event:
                 self.global_trigger = True
-            self.player.single_fire_event(event)
 
     def run(self):
         while True:

@@ -3,14 +3,12 @@
 El juego se controla frente a la webcam usando solo técnicas básicas de procesamiento digital de
 imágenes: umbralización, morfología, contornos y momentos de imagen. No se usa IA.
 
-| Parte | Gesto | Valor que se obtiene |
-|---|---|---|
-| Mano | Moverla a la izquierda o a la derecha | `aim` ∈ [−1, 1]: mira |
-| Mano | Cerrarla (puño) | `shoot`: disparo |
-| Cabeza | Inclinarla hacia un hombro (roll) | `roll` ∈ [−1, 1] (+ = hombro derecho) |
-| Cabeza | Inclinarla hacia adelante o atrás (pitch) | `pitch` ∈ [−1, 1] (+ = adelante) |
-
-Los valores de la cabeza ya se calculan, pero todavía no están asignados a ninguna acción del juego.
+| Parte | Gesto | Valor que se obtiene | Acción en el juego |
+|---|---|---|---|
+| Mano | Moverla a la izquierda o a la derecha | `aim` ∈ [−1, 1] | Girar |
+| Mano | Cerrarla (puño) | `shoot` | Disparar |
+| Cabeza | Inclinarla hacia adelante o atrás (pitch) | `pitch` ∈ [−1, 1] (+ = adelante) | Avanzar / retroceder |
+| Cabeza | Inclinarla hacia un hombro (roll) | `roll` ∈ [−1, 1] (+ = hombro derecho) | Moverse de lado |
 
 ## Zonas de la pantalla
 
@@ -35,6 +33,7 @@ Las proporciones se cambian en [config.py](config.py) con `HAND_X`, `HAND_Y` y `
 
 ```
 vision/
+├── bridge.py              ← puente con el juego: hilo de la cámara + get_controls()
 ├── config.py              ← parámetros: zonas, umbrales, zonas muertas
 ├── pipeline.py            ← une las etapas: process_hand() y process_face()
 ├── main.py                ← prueba con la cámara real
@@ -120,6 +119,22 @@ de 1500 píxeles, se considera que no hay mano.
   - Zona muerta de 0.08 y valor máximo a partir de 0.35.
 - **Altura neutra:** se toma automáticamente en el primer frame en que aparece la cara. La tecla
   **`c`** la vuelve a tomar.
+
+## Conexión con el juego — [bridge.py](bridge.py)
+
+- `start()` abre la cámara y ejecuta el pipeline en un **hilo aparte**, así la cámara (~30 fps)
+  no limita los fps del juego.
+- En cada frame, el juego llama a `get_controls()` desde `Player.update()` y recibe
+  `{'aim', 'forward', 'strafe', 'shoot'}`.
+- `shoot` se retiene hasta que el juego lo lee, para no perder un disparo si el juego y la cámara
+  van a distinta velocidad.
+- `draw_preview()` dibuja la imagen anotada en la esquina del juego y `recalibrate()` se activa
+  con la tecla **C**.
+
+En el juego solo cambian dos archivos:
+- [main.py](../main.py): iniciar la cámara, mostrar la vista previa y la tecla C.
+- [player.py](../player.py): `movement`, `aim_control` y `fire` leen los controles de la cámara
+  en lugar del teclado y el mouse.
 
 ## Cómo usarlo
 

@@ -1,6 +1,7 @@
 from settings import *
 import pygame as pg
 import math
+from vision import bridge as camera
 
 
 class Player:
@@ -39,42 +40,27 @@ class Player:
         self.game.sound.player_pain.play()
         self.check_game_over()
 
-    def single_fire_event(self, event):
-        if event.type == pg.MOUSEBUTTONDOWN:
-            if event.button == 1 and not self.shot and not self.game.weapon.reloading:
-                self.game.sound.shotgun.play()
-                self.shot = True
-                self.game.weapon.reloading = True
+    def fire(self, controls):
+        # puño cerrado (cámara)
+        if controls['shoot'] and not self.shot and not self.game.weapon.reloading:
+            self.game.sound.shotgun.play()
+            self.shot = True
+            self.game.weapon.reloading = True
 
-    def movement(self):
+    def movement(self, controls):
         sin_a = math.sin(self.angle)
         cos_a = math.cos(self.angle)
-        dx, dy = 0, 0
         speed = PLAYER_SPEED * self.game.delta_time
         speed_sin = speed * sin_a
         speed_cos = speed * cos_a
 
-        keys = pg.key.get_pressed()
-        num_key_pressed = -1
-        if keys[pg.K_w]:
-            num_key_pressed += 1
-            dx += speed_cos
-            dy += speed_sin
-        if keys[pg.K_s]:
-            num_key_pressed += 1
-            dx += -speed_cos
-            dy += -speed_sin
-        if keys[pg.K_a]:
-            num_key_pressed += 1
-            dx += speed_sin
-            dy += -speed_cos
-        if keys[pg.K_d]:
-            num_key_pressed += 1
-            dx += -speed_sin
-            dy += speed_cos
+        # cabeza (cámara): forward = adelante/atrás, strafe = derecha/izquierda, ambos en [-1, 1]
+        forward, strafe = controls['forward'], controls['strafe']
+        dx = forward * speed_cos - strafe * speed_sin
+        dy = forward * speed_sin + strafe * speed_cos
 
         # diag move correction
-        if num_key_pressed:
+        if forward and strafe:
             dx *= self.diag_move_corr
             dy *= self.diag_move_corr
 
@@ -102,17 +88,16 @@ class Player:
                      self.y * 100 + WIDTH * math. sin(self.angle)), 2)
         pg.draw.circle(self.game.screen, 'green', (self.x * 100, self.y * 100), 15)
 
-    def mouse_control(self):
-        mx, my = pg.mouse.get_pos()
-        if mx < MOUSE_BORDER_LEFT or mx > MOUSE_BORDER_RIGHT:
-            pg.mouse.set_pos([HALF_WIDTH, HALF_HEIGHT])
-        self.rel = pg.mouse.get_rel()[0]
-        self.rel = max(-MOUSE_MAX_REL, min(MOUSE_MAX_REL, self.rel))
-        self.angle += self.rel * MOUSE_SENSITIVITY * self.game.delta_time
+    def aim_control(self, controls):
+        # mano (cámara): aim en [-1, 1] -> velocidad de giro
+        self.rel = controls['aim'] * PLAYER_ROT_SPEED / MOUSE_SENSITIVITY  # equivalente en mouse (mueve el cielo)
+        self.angle += controls['aim'] * PLAYER_ROT_SPEED * self.game.delta_time
 
     def update(self):
-        self.movement()
-        self.mouse_control()
+        controls = camera.get_controls()
+        self.movement(controls)
+        self.aim_control(controls)
+        self.fire(controls)
         self.recover_health()
 
     @property

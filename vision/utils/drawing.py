@@ -59,8 +59,14 @@ def draw_face(img, r):
         cv2.putText(img, text, (x + 4, h - 34 + 12 * i), FONT, 0.35, MAGENTA, 1)
 
 
-def draw(r):
+def draw_annotated(r):
+    """Imagen de la cámara con zonas, contornos y valores."""
     img = r['img'].copy()
     draw_face(img, r)
     draw_hand(img, r)
-    return np.hstack([img, cv2.cvtColor(r['mask'], cv2.COLOR_GRAY2BGR)])
+    return img
+
+
+def draw(r):
+    """Imagen anotada + máscara binaria, lado a lado."""
+    return np.hstack([draw_annotated(r), cv2.cvtColor(r['mask'], cv2.COLOR_GRAY2BGR)])
