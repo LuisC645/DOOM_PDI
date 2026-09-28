@@ -1,164 +1,178 @@
-# Control de Doom con la mano y la cabeza: pipeline de procesamiento de imágenes
+# Control de Doom con un guante azul: pipeline de procesamiento de imágenes
 
-El juego se controla frente a la webcam usando solo técnicas básicas de procesamiento digital de
-imágenes: umbralización, morfología, contornos y momentos de imagen. No se usa IA.
+Con un **guante azul** frente a la webcam se apunta y se dispara, y con el teclado (W A S D) se
+camina. Solo se usan técnicas básicas de procesamiento digital de imágenes: conversión al espacio
+de color HSV, umbralización con `cv2.inRange`, morfología, contornos y momentos de imagen. No se
+usa IA.
 
-| Parte | Gesto | Valor que se obtiene | Acción en el juego |
-|---|---|---|---|
-| Mano | Moverla a la izquierda o a la derecha | `aim` ∈ [−1, 1] | Girar |
-| Mano | Cerrarla (puño) | `shoot` | Disparar |
-| Cabeza | Inclinarla hacia adelante o atrás (pitch) | `pitch` ∈ [−1, 1] (+ = adelante) | Avanzar / retroceder |
-| Cabeza | Inclinarla hacia un hombro (roll) | `roll` ∈ [−1, 1] (+ = hombro derecho) | Moverse de lado |
+| Gesto | Valor que se obtiene | Acción en el juego |
+|---|---|---|
+| Mover el guante a la izquierda o a la derecha | `aim` ∈ [−1, 1] | Girar |
+| Cerrar la mano (puño) | `shoot` | Disparar |
 
-## Zonas de la pantalla
+## Zona de la mano
 
 ```
-+----------------+---------------------------------+
-|                |      (cara: queda fuera)        |
-|    CABEZA      +---------------------------------+
-|    (1.5/4)     |      MANO (2.5/4)               |
-|                |   |←margen            margen→|  |
-+----------------+---------------------------------+
++-----------+------------------------------------+
+|           |            MANO (3/4)              |
+|           |                                    |
+|   (1/4)   |  |←margen                 margen→| |
++-----------+------------------------------------+
+            ↑ línea que separa la pantalla
 ```
 
-- **Zona de la mano:** los 2.5/4 derechos, solo en la mitad inferior (altura del pecho).
-  - La mitad superior queda fuera para que la cara no se una con la mano.
-  - Las líneas grises interiores marcan el **margen**. La mira llega a ±1 en esas líneas, no en el
-    borde, porque el centroide de la mano nunca toca el borde del recuadro.
-- **Zona de la cabeza:** los 1.5/4 izquierdos, con todo el alto. La cara va ahí.
+- El guante se busca solo en los **3/4 derechos** de la imagen, con todo el alto.
+- **Margen:** la mira llega a ±1 a una distancia del 15 % del ancho antes de cada borde, porque
+  el centroide nunca toca el borde de la zona y cerca de los bordes la detección falla más.
+  Pasado el margen, la mira se mantiene en ±1.
 
-Las proporciones se cambian en [config.py](config.py) con `HAND_X`, `HAND_Y` y `AIM_MARGIN`.
+Las proporciones se cambian en [config.py](config.py) con `HAND_X` y `AIM_MARGIN`.
+
+**Vista previa:** muestra solo la imagen de la cámara, la línea que separa la pantalla y el estado
+de la mano: ABIERTA, CERRADA o SIN MANO. En `vision.main` se ve además la máscara del guante.
 
 ## Estructura de archivos
 
 ```
 vision/
 ├── bridge.py              ← puente con el juego: hilo de la cámara + get_controls()
-├── config.py              ← parámetros: zonas, umbrales, zonas muertas
-├── pipeline.py            ← une las etapas: process_hand() y process_face()
-├── main.py                ← prueba con la cámara real
+├── config.py              ← parámetros: zona, rango HSV del guante, puño, margen, suavizado
+├── pipeline.py            ← une las etapas: frame → mira, puño, disparo
+├── main.py                ← prueba con la cámara: vista previa + máscara + calibración
 ├── processing/            ← las etapas de procesamiento de imágenes
-│   ├── segmentation.py    ← 1-4. redimensionar, espejo, Gaussiano, YCrCb, umbral, morfología
-│   ├── features.py        ← 5-6. contornos, centroide, solidez, recorte de la cara, orientación
-│   └── controls.py        ← 7. valores → [−1, 1] (zona muerta, margen, suavizado)
-├── utils/                 ← herramientas de apoyo, no son parte del procesamiento
-│   ├── drawing.py         ← dibuja zonas, contornos, ejes y barras
-│   └── trackbars.py       ← barras para ajustar umbrales en vivo
+│   ├── segmentation.py    ← 1-4. redimensionar, espejo, Gaussiano, HSV, umbral, morfología, calibración
+│   ├── features.py        ← 5-6. contorno, quitar el brazo, centroide, solidez
+│   └── controls.py        ← 7. mira (margen, suavizado)
+├── utils/
+│   └── drawing.py         ← vista previa: línea divisoria + ABIERTA / CERRADA
 └── tests/                 ← pruebas sin cámara
-    ├── synthetic.py       ← genera imágenes de prueba (cara con cuello, mano abierta, puño)
-    └── test_pipeline.py   ← 12 pruebas de cada etapa
+    ├── synthetic.py       ← genera imágenes de prueba (guante, piel, cara, brazo doblado)
+    └── test_pipeline.py   ← 13 pruebas de cada etapa
 ```
 
 ## Pipeline
 
 ```
-Cámara → [1] Preprocesamiento → [2] YCrCb → [3] Umbralización → [4] Morfología
-       ├→ zona de la mano:  [5] contorno → [6] centroide, solidez      → [7] mira, disparo
-       └→ zona de la cabeza: [5] contorno → [6] recorte, orientación    → [7] roll, pitch
+Cámara → [1] Preprocesamiento → [2] BGR → HSV → [3] Umbralización (inRange) → [4] Morfología
+       → [5] Contorno del guante → [5b] Quitar el brazo → [6] Centroide y solidez → [7] Mira y disparo
 ```
 
-### Etapas comunes — [processing/segmentation.py](processing/segmentation.py)
-
-**1. Preprocesamiento**
+**1. Preprocesamiento** — [processing/segmentation.py](processing/segmentation.py)
 - La imagen se reduce a 320x240 y se voltea horizontalmente para que funcione como un espejo.
 - Se suaviza con un **filtro Gaussiano 5x5**, que reduce el ruido del sensor.
 
-**2. Espacio de color YCrCb**
-- YCrCb separa la luminancia (**Y**) de la crominancia (**Cr, Cb**).
-- La piel ocupa un rango compacto de Cr y Cb aunque cambie la luz, por eso se umbraliza en esos canales.
+**2. Espacio de color HSV**
+- En RGB, el brillo y el color están mezclados: un guante con sombra y uno iluminado tienen
+  valores RGB muy distintos.
+- HSV separa el **tono** (H, qué color es), la **saturación** (S, qué tan puro es) y el **brillo**
+  (V). El azul ocupa un rango estrecho de H aunque cambie la luz.
 
 **3. Umbralización**
-- `cv2.inRange` deja en blanco los píxeles con Cr ∈ [133, 173] y Cb ∈ [77, 127], y en negro el resto.
-- El resultado es una imagen binaria. Los umbrales se ajustan en vivo con las barras.
+- `cv2.inRange` deja en blanco los píxeles que cumplen las tres condiciones y en negro el resto:
+  - H ∈ [100, 130]: tono azul.
+  - S ≥ 80: descarta grises y blancos.
+  - V ≥ 40: descarta sombras muy oscuras.
+- El resultado es una **imagen binaria** con el guante en blanco. La piel, la cara y el fondo
+  quedan fuera porque no son azules.
+- **Calibración** (tecla `c` en `vision.main`): se miden los píxeles del guante dentro de un
+  recuadro y el rango pasa a ser `[percentil 5 − holgura, percentil 95 + holgura]` en cada canal.
+  Los valores se imprimen para copiarlos en [config.py](config.py).
 
 **4. Morfología**
-- **Apertura** con un elemento de 3x3: quita puntos blancos sueltos.
-- **Cierre** con un elemento de 9x9: rellena huecos, como ojos y boca en la cara o sombras en la mano.
+- **Apertura** (erosión y luego dilatación) con un elemento de 3x3: quita puntos blancos sueltos.
+- **Cierre** (dilatación y luego erosión) con un elemento de 9x9: rellena huecos dentro del guante,
+  como pliegues o reflejos.
 
-### Mano — [processing/features.py](processing/features.py), [processing/controls.py](processing/controls.py)
+**5. Contorno del guante** — [processing/features.py](processing/features.py)
+- `cv2.findContours` busca contornos solo dentro de la zona de la mano, que funciona como región
+  de interés, y se toma el de mayor área.
+- Si el área es menor a 1500 píxeles, se considera que no hay mano.
 
-**5. Contorno:** se toma el contorno de mayor área dentro de la zona de la mano. Si mide menos
-de 1500 píxeles, se considera que no hay mano.
+**5b. Quitar el brazo** (`remove_arm`)
+- Si el guante es largo o la manga es del mismo color, el brazo entra en el contorno. Con el
+  brazo doblado, eso crea una concavidad que baja la solidez, y un puño parecería una mano abierta.
+- **Transformada de distancia** (`cv2.distanceTransform`): a cada píxel le asigna su distancia al
+  borde. El máximo es el **centro de la palma** y su valor es el **radio de la palma** *r*. Se busca
+  en el 75 % superior del blob, porque el brazo está abajo.
+- Se borra todo lo que está más de **1.1·r** por debajo del centro de la palma.
 
 **6. Descriptores**
-- **Centroide** a partir de los momentos: `cx = M10 / M00`.
-- **Solidez** = área del contorno / área del casco convexo. La mano abierta da ≈ 0.6 por el
-  espacio entre los dedos y el puño da ≈ 0.87.
+- **Centroide** a partir de los momentos de imagen: `cx = M10 / M00`.
+- **Solidez** = área del contorno / área del casco convexo (`cv2.convexHull`):
+  - Con la mano **abierta**, hay espacio vacío entre los dedos y la solidez es baja (≈ 0.72).
+  - Con el **puño**, la forma es casi convexa y la solidez es alta (≈ 0.96).
+  - Si la solidez es ≥ 0.84 (`FIST_SOLIDITY`), se considera puño.
 
-**7. Comandos**
-- **Mira:** `(cx − centro) / alcance`, donde el alcance es la distancia del centro al margen.
-  - Zona muerta de ±0.15 en el centro.
-  - Suavizado exponencial: `0.4·nuevo + 0.6·anterior`.
-- **Disparo:** la solidez es ≥ 0.80 en este frame y en el anterior no lo era, es decir, la mano
-  se acaba de cerrar.
+**7. Mira y disparo** — [processing/controls.py](processing/controls.py)
+- **Mira:** `(cx − centro) / alcance`, limitado a [−1, 1], donde el alcance es la distancia del
+  centro al margen. Es lineal: 0 en el centro, ±1 en el margen y ±1 más allá.
+  - Suavizado exponencial: `0.4·nuevo + 0.6·anterior`. Quita el temblor.
+  - Si la mano desaparece y vuelve, el primer valor se toma sin suavizar.
+- **Disparo:** solo en el frame en que la mano pasa de abierta a cerrada.
 
-### Cabeza — [processing/features.py](processing/features.py), [processing/controls.py](processing/controls.py)
+## Cálculos matemáticos
 
-**5. Contorno:** se toma el contorno de mayor área dentro de la zona de la cabeza.
-
-**6a. Recorte del cuello** (`face_region`)
-- La cara y el cuello son piel continua, así que forman un solo blob.
-- Se usa la proporción de una cara humana: la cara es la parte superior del blob, con un alto de
-  **1.3 × ancho**. Lo que queda debajo es cuello y se descarta.
-
-**6b. Orientación por momentos centrales** (`orientation`)
-- Con los momentos centrales de segundo orden (μ20, μ02, μ11) de la región de la cara se calcula
-  el ángulo de su **eje mayor** respecto a la vertical:
-
-  `θ = ½ · atan2(2·μ11, μ02 − μ20)`
-
-- Una cara derecha tiene el eje mayor vertical (θ ≈ 0°). Al inclinarla hacia un hombro, el eje
-  rota y ese ángulo es el **roll**.
-
-**7. Comandos**
-- **Roll:** zona muerta de ±8° y valor máximo a partir de 30°. Resultado en [−1, 1].
-- **Pitch** (adelante o atrás):
-  - Al inclinar la cabeza hacia adelante, la cara baja en la imagen; hacia atrás, sube.
-  - Se mide el desplazamiento vertical del centroide respecto a una **altura neutra** y se divide
-    por el alto de la cara, para que no dependa de la distancia a la cámara.
-  - Zona muerta de 0.08 y valor máximo a partir de 0.35.
-- **Altura neutra:** se toma automáticamente en el primer frame en que aparece la cara. La tecla
-  **`c`** la vuelve a tomar.
+| # | Cálculo | Fórmula | Para qué |
+|---|---|---|---|
+| 1 | **Filtro Gaussiano** | `G(x,y) = (1 / 2πσ²) · e^(−(x² + y²) / 2σ²)`, convolución con un kernel de 5x5 | Reducir el ruido antes de umbralizar |
+| 2 | **BGR → HSV** | `V = max(R,G,B)`<br>`S = (V − min) / V`<br>`H = 60° · (4 + (R − G)/(V − min))` si V = B (el caso del azul)<br>En OpenCV, H se divide entre 2 (0–179) y S, V se escalan a 0–255 | Separar el color del brillo |
+| 3 | **Umbralización** | `M(x,y) = 255` si `Hmin ≤ H ≤ Hmax` y `Smin ≤ S ≤ Smax` y `Vmin ≤ V ≤ Vmax`; `0` si no | Imagen binaria del guante |
+| 4 | **Calibración** | `min = P₅ − holgura`, `max = P₉₅ + holgura` (percentiles de cada canal) | Adaptar el rango a tu guante y tu luz |
+| 5 | **Erosión y dilatación** | Erosión: `(A ⊖ B) = {z : B_z ⊆ A}`<br>Dilatación: `(A ⊕ B) = {z : B_z ∩ A ≠ ∅}`<br>Apertura: `A ∘ B = (A ⊖ B) ⊕ B`<br>Cierre: `A • B = (A ⊕ B) ⊖ B` | Quitar ruido y rellenar huecos |
+| 6 | **Momentos de imagen** | `M_pq = Σ_x Σ_y x^p · y^q · I(x,y)` | M00 = área |
+| 7 | **Centroide** | `cx = M10 / M00`, `cy = M01 / M00` | Posición del guante |
+| 8 | **Casco convexo y solidez** | `solidez = área(contorno) / área(casco convexo)`<br>El área se calcula con la fórmula del polígono (Shoelace): `A = ½ · |Σ (xᵢ·yᵢ₊₁ − xᵢ₊₁·yᵢ)|` | Distinguir la mano abierta del puño |
+| 9 | **Transformada de distancia** | `D(p) = min ‖p − q‖` para todo `q` del fondo (distancia euclidiana)<br>Centro de la palma = `argmax D`, radio `r = max D` | Encontrar la palma y cortar el brazo |
+| 10 | **Normalización de la mira** | `aim = clamp((cx − centro) / alcance, −1, 1)`<br>`alcance = w/2 − margen·w` | Posición → valor en [−1, 1] |
+| 11 | **Suavizado exponencial** | `aimₜ = α · medidaₜ + (1 − α) · aimₜ₋₁`, con α = 0.4 | Quitar el temblor |
+| 12 | **Detección de flanco** | `disparo = puñoₜ ∧ ¬puñoₜ₋₁` | Un disparo por cada cierre |
+| 13 | **Giro por posición** | `Δθ = (aimₜ − aimₜ₋₁) · π/3`<br>En el margen: `+ signo(aim) · ω · Δt`, con ω ≈ 2 rad/s | La vista sigue a la mano |
 
 ## Conexión con el juego — [bridge.py](bridge.py)
 
 - `start()` abre la cámara y ejecuta el pipeline en un **hilo aparte**, así la cámara (~30 fps)
   no limita los fps del juego.
 - En cada frame, el juego llama a `get_controls()` desde `Player.update()` y recibe
-  `{'aim', 'forward', 'strafe', 'shoot'}`.
+  `{'aim', 'shoot'}`. `aim` vale `None` si no hay mano.
 - `shoot` se retiene hasta que el juego lo lee, para no perder un disparo si el juego y la cámara
   van a distinta velocidad.
-- `draw_preview()` dibuja la imagen anotada en la esquina del juego y `recalibrate()` se activa
-  con la tecla **C**.
+- `draw_preview()` dibuja la vista previa en la esquina superior derecha del juego.
 
 En el juego solo cambian dos archivos:
-- [main.py](../main.py): iniciar la cámara, mostrar la vista previa y la tecla C.
-- [player.py](../player.py): `movement`, `aim_control` y `fire` leen los controles de la cámara
-  en lugar del teclado y el mouse.
+- [main.py](../main.py): iniciar y cerrar la cámara, y dibujar la vista previa.
+- [player.py](../player.py): `aim_control` y `fire` reemplazan al mouse. El movimiento con
+  W A S D es el original.
+
+**Giro por posición, como un mouse** (`aim_control`):
+- En cada frame, el giro es el cambio de posición de la mano multiplicado por la sensibilidad:
+  `Δángulo = (aim − aim_anterior) · HAND_SENSITIVITY`. Con `HAND_SENSITIVITY = π/3`, cruzar la
+  zona de −1 a +1 gira 120°.
+- **Margen:** si `|aim| > 0.95` (`HAND_EDGE`), la vista además gira de forma continua hacia ese
+  lado (≈ 115°/s). Así se puede dar la vuelta completa sin salir de la zona.
+- Si no hay mano (`aim = None`), la vista no gira, y al reaparecer la mano no hay salto.
+
+Las dos constantes están en [settings.py](../settings.py).
 
 ## Cómo usarlo
 
 Desde la raíz del proyecto, con el entorno virtual activo:
 
 ```bash
-python -m vision.main                   # prueba con la cámara
+python main.py                          # jugar
+python -m vision.main                   # ver la vista previa y la máscara, y calibrar el color
 python -m vision.tests.test_pipeline    # pruebas automáticas (no necesitan cámara)
 ```
 
-1. Buena luz frontal y un fondo sin colores parecidos a la piel.
-2. Colócate de modo que tu **cara quede en el recuadro morado** (izquierda) y pon la mano derecha
-   en el **recuadro verde**, a la altura del pecho y con los dedos separados.
-3. Con la cabeza derecha y en reposo, pulsa **`c`** para fijar la posición neutra.
-4. Si la mano o la cara no aparecen completas en blanco en la máscara, ajusta las barras de Cr y Cb.
-5. `q` o `Esc` para salir.
+1. **Calibra una vez:** en `python -m vision.main`, pon la palma del guante sobre el recuadro
+   amarillo y pulsa **`c`**. Copia los dos valores que se imprimen (`HSV_LOWER`, `HSV_UPPER`) en
+   [config.py](config.py).
+2. Revisa en la máscara que el guante salga completo en blanco y que no aparezcan otras cosas.
+3. En el juego, usa el guante a la derecha de la línea verde, con los dedos separados.
 
 ## Limitaciones
 
-- Los objetos del fondo con color piel (madera, paredes beige) pueden aparecer en la máscara.
-- El **pitch** se estima por el desplazamiento vertical de la cara. Si te mueves entero hacia
-  arriba o hacia abajo, por ejemplo al acomodarte en la silla, también cuenta como pitch. En ese
-  caso, recalibra con `c`.
-- El **roll** medido es algo menor que el ángulo real, porque el recorte conserva un poco de cuello,
-  que es vertical. La dirección siempre es correcta.
+- Otros objetos azules en la zona (jeans, camisas, afiches, el cielo por una ventana) pueden
+  aparecer en la máscara. Conviene calibrar y no usar ropa azul.
+- Con luz muy tenue, la saturación del guante baja y puede perderse. En ese caso, vuelve a calibrar.
 - La mano abierta debe tener los dedos separados. Con los dedos juntos, la solidez sube y puede
   confundirse con un puño.

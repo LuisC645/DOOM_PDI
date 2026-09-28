@@ -19,6 +19,9 @@ MOUSE_MAX_REL = 40
 MOUSE_BORDER_LEFT = 100
 MOUSE_BORDER_RIGHT = WIDTH - MOUSE_BORDER_LEFT
 
+HAND_SENSITIVITY = math.pi / 3  # giro por unidad de mira: cruzar la zona de la mano (-1 a 1) = 120°
+HAND_EDGE = 0.95                # con la mano en el margen (|mira| > esto) la vista sigue girando
+
 FLOOR_COLOR = (30, 30, 30)
 
 FOV = math.pi / 3

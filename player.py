@@ -12,6 +12,7 @@ class Player:
         self.shot = False
         self.health = PLAYER_MAX_HEALTH
         self.rel = 0
+        self.prev_aim = None
         self.health_recovery_delay = 700
         self.time_prev = pg.time.get_ticks()
         # diagonal movement correction
@@ -47,20 +48,35 @@ class Player:
             self.shot = True
             self.game.weapon.reloading = True
 
-    def movement(self, controls):
+    def movement(self):
         sin_a = math.sin(self.angle)
         cos_a = math.cos(self.angle)
+        dx, dy = 0, 0
         speed = PLAYER_SPEED * self.game.delta_time
         speed_sin = speed * sin_a
         speed_cos = speed * cos_a
 
-        # cabeza (cámara): forward = adelante/atrás, strafe = derecha/izquierda, ambos en [-1, 1]
-        forward, strafe = controls['forward'], controls['strafe']
-        dx = forward * speed_cos - strafe * speed_sin
-        dy = forward * speed_sin + strafe * speed_cos
+        keys = pg.key.get_pressed()
+        num_key_pressed = -1
+        if keys[pg.K_w]:
+            num_key_pressed += 1
+            dx += speed_cos
+            dy += speed_sin
+        if keys[pg.K_s]:
+            num_key_pressed += 1
+            dx += -speed_cos
+            dy += -speed_sin
+        if keys[pg.K_a]:
+            num_key_pressed += 1
+            dx += speed_sin
+            dy += -speed_cos
+        if keys[pg.K_d]:
+            num_key_pressed += 1
+            dx += -speed_sin
+            dy += speed_cos
 
         # diag move correction
-        if forward and strafe:
+        if num_key_pressed:
             dx *= self.diag_move_corr
             dy *= self.diag_move_corr
 
@@ -89,13 +105,19 @@ class Player:
         pg.draw.circle(self.game.screen, 'green', (self.x * 100, self.y * 100), 15)
 
     def aim_control(self, controls):
-        # mano (cámara): aim en [-1, 1] -> velocidad de giro
-        self.rel = controls['aim'] * PLAYER_ROT_SPEED / MOUSE_SENSITIVITY  # equivalente en mouse (mueve el cielo)
-        self.angle += controls['aim'] * PLAYER_ROT_SPEED * self.game.delta_time
+        # mano (cámara): la vista sigue la posición de la mano, como un mouse
+        aim, delta = controls['aim'], 0
+        if aim is not None and self.prev_aim is not None:
+            delta = (aim - self.prev_aim) * HAND_SENSITIVITY
+        if aim is not None and abs(aim) > HAND_EDGE:  # mano en el margen: sigue girando hacia ese lado
+            delta += math.copysign(PLAYER_ROT_SPEED * self.game.delta_time, aim)
+        self.prev_aim = aim
+        self.rel = delta / (MOUSE_SENSITIVITY * self.game.delta_time)  # equivalente en mouse (mueve el cielo)
+        self.angle += delta
 
     def update(self):
         controls = camera.get_controls()
-        self.movement(controls)
+        self.movement()
         self.aim_control(controls)
         self.fire(controls)
         self.recover_health()

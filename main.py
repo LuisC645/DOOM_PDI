@@ -62,8 +62,6 @@ class Game:
                 camera.stop()
                 pg.quit()
                 sys.exit()
-            elif event.type == pg.KEYDOWN and event.key == pg.K_c:
-                camera.recalibrate()
             elif event.type == self.global_event:
                 self.global_trigger = True
 

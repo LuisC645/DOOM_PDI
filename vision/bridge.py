@@ -2,8 +2,7 @@
 
 La cámara se procesa en un hilo aparte para no frenar el juego. El juego solo usa:
     start()          abrir la cámara
-    get_controls()   {'aim', 'forward', 'strafe', 'shoot'} del último frame
-    recalibrate()    tomar la posición actual de la cabeza como neutra
+    get_controls()   {'aim', 'shoot'} del último frame
     draw_preview()   dibujar la vista de la cámara en la pantalla de Pygame
     stop()           cerrar la cámara
 """
@@ -14,9 +13,9 @@ import pygame as pg
 
 from vision import config as cfg
 from vision.pipeline import START, process
-from vision.utils.drawing import draw_annotated
+from vision.utils.drawing import annotate
 
-_state = {'result': START, 'shoot': False, 'preview': None, 'recalibrate': False, 'running': False}
+_state = {'result': START, 'shoot': False, 'preview': None, 'running': False}
 _lock = threading.Lock()
 _cap = None
 
@@ -27,11 +26,8 @@ def _loop():
         ok, frame = _cap.read()
         if not ok:
             continue
-        if _state['recalibrate']:
-            r = {**r, 'face_ref': None}
-            _state['recalibrate'] = False
         r = process(frame, r)
-        preview = cv2.cvtColor(draw_annotated(r), cv2.COLOR_BGR2RGB)
+        preview = cv2.cvtColor(annotate(r), cv2.COLOR_BGR2RGB)
         with _lock:
             _state['result'] = r
             _state['shoot'] = _state['shoot'] or r['shoot']   # se guarda hasta que el juego lo lea
@@ -54,20 +50,14 @@ def stop():
 
 
 def get_controls():
-    """Valores en [-1, 1] para mirar y moverse; `shoot` es True una vez por cada puño."""
+    """Controles para el juego; `shoot` es True una vez por cada puño."""
     with _lock:
         r = _state['result']
         shoot, _state['shoot'] = _state['shoot'], False
     return {
-        'aim': r['aim'],          # mano: izquierda / derecha
-        'forward': r['pitch'],    # cabeza: adelante (+) / atrás (-)
-        'strafe': r['roll'],      # cabeza: hombro derecho (+) / izquierdo (-)
-        'shoot': shoot,           # mano: puño
+        'aim': r['aim'] if r['hand'] is not None else None,   # posición de la mano en [-1, 1]; None = sin mano
+        'shoot': shoot,                                       # mano: puño
     }
-
-
-def recalibrate():
-    _state['recalibrate'] = True
 
 
 def draw_preview(screen, pos=None):
